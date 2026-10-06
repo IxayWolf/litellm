@@ -453,7 +453,7 @@ from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfi
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 from litellm.secret_managers.main import get_secret
 
-from ._logging import is_debugging_on, verbose_logger
+from ._logging import is_debugging_on, redact_secrets, verbose_logger
 from .caching.caching import (
     AzureBlobCache,
     Cache,
@@ -2423,8 +2423,10 @@ def _select_tokenizer_helper(model: str) -> SelectTokenizerResponse:
         if isinstance(e, (ForkedAfterNativeRuntimeStarted, ProcessReservedForForking)):
             raise
         verbose_logger.warning(
-            "Falling back to tiktoken; token counts may be approximate. "
-            "For Python Hugging Face tokenization, install tokenizers and huggingface-hub.",
+            "Falling back to tiktoken for %s; token counts may be approximate. "
+            "For Python Hugging Face tokenization, install tokenizers and huggingface-hub. Error: %s",
+            json.dumps(redact_secrets(model)),
+            json.dumps(redact_secrets(str(e))),
         )
 
     # default - tiktoken
