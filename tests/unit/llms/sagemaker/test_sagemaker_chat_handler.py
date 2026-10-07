@@ -88,3 +88,23 @@ def test_load_credentials_assumes_role_with_session_tags(monkeypatch):
     assert credentials.access_key == "ASIASMCHATTAGGED"
     assert aws_region_name == "us-east-1"
     assert "aws_session_tags" not in optional_params
+
+
+def test_missing_botocore_keeps_dependency_identity():
+    import pytest
+
+    with patch.dict("sys.modules", {"botocore": None}):
+        with pytest.raises(ModuleNotFoundError, match="pip install boto3") as caught:
+            SagemakerChatHandler()._load_credentials({})
+    assert caught.value.name == "botocore"
+
+
+def test_installed_botocore_signs_the_chat_request():
+    from botocore.credentials import Credentials
+
+    request = SagemakerChatHandler()._prepare_request(
+        credentials=Credentials("test-key", "test-secret"), model="test-endpoint", data={"inputs": "ping"},
+        optional_params={}, aws_region_name="us-west-2",
+    )
+    assert request.body == b'{"inputs": "ping"}'
+    assert "/us-west-2/sagemaker/aws4_request" in request.headers["Authorization"]
