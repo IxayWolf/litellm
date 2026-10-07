@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
@@ -84,19 +84,23 @@ describe("KeyAutoRouterUsageTab", () => {
     };
     renderWithProviders(<KeyAutoRouterUsageTab accessToken="test-token" keyToken="key-hash-1" activity={activity} />);
 
-    expect(await screen.findByText("$8.75")).toBeInTheDocument();
-    expect(screen.getByText("Actual auto-router spend")).toBeInTheDocument();
-    expect(screen.getByText("$1.25")).toBeInTheDocument();
-    expect(screen.getByText("LLM spend")).toBeInTheDocument();
-    expect(screen.getByText("$1.00")).toBeInTheDocument();
-    expect(screen.getByText("Classification cost")).toBeInTheDocument();
-    expect(screen.getByText("$0.2500")).toBeInTheDocument();
-    expect(screen.getByText("($62.50 / 1K turns)")).toBeInTheDocument();
-    expect(screen.getByText("Estimated baseline spend")).toBeInTheDocument();
-    expect(screen.getByText("$10.00")).toBeInTheDocument();
+    const savings = within(await screen.findByRole("region", { name: "Auto-router savings" }));
+    expect(savings.getByText("$8.75")).toBeInTheDocument();
+    expect(savings.getByText("Actual auto-router spend")).toBeInTheDocument();
+    expect(savings.getByText("$1.25")).toBeInTheDocument();
+    expect(savings.getByText("LLM spend")).toBeInTheDocument();
+    expect(savings.getByText("$1.00")).toBeInTheDocument();
+    expect(savings.getByText("Classification cost")).toBeInTheDocument();
+    expect(savings.getByText("$0.2500")).toBeInTheDocument();
+    expect(savings.getByText("($62.50 / 1K turns)")).toBeInTheDocument();
+    expect(savings.getByText("Estimated baseline spend")).toBeInTheDocument();
+    expect(savings.getByText("$10.00")).toBeInTheDocument();
     expect(screen.getByText("Auto-router prompt caching")).toBeInTheDocument();
     expect(screen.getAllByText("50.0%").length).toBeGreaterThan(0);
     expect(screen.getByText("All auto-routers")).toBeInTheDocument();
+    const summary = within(screen.getByRole("table", { name: "Router usage and savings" }));
+    expect(summary.getByRole("row", { name: /router-one.*\$1\.25.*\$8\.75/ })).toBeInTheDocument();
+    expect(summary.getByRole("row", { name: /router-two.*\$0\.25.*\$0\.75/ })).toBeInTheDocument();
 
     const benchmarkUrl = new URL(requestedUrls().find((url) => url.includes("/auto_router/benchmarks")) ?? "");
     expect(benchmarkUrl.searchParams.get("api_key")).toBe("key-hash-1");

@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -201,6 +202,65 @@ describe("AutoRouterBenchmarksTab", () => {
     }
   });
 
+  it("shows per-router token costs above caching and follows the router picker", async () => {
+    const standard = { total_tokens: 100_000_000, spend: 20_000, saved_spend: 4_000, saved_pct: 16.7 };
+    const losing = { router_name: "gpt-auto", total_tokens: 2_000_000, spend: 15, saved_spend: -5, saved_pct: -50 };
+    mockHook({ data: response([group(standard), group(losing)]) });
+    renderTab();
+
+    const table = screen.getByRole("table", { name: "Router usage and savings" });
+    const rows = within(table).getAllByRole("row");
+    expect(
+      within(rows[1])
+        .getAllByRole("cell")
+        .map((cell) => cell.textContent),
+    ).toEqual(["claude-auto", "100,000,000", "$20,000.00", "$200.00", "$4,000.00", "16.7%"]);
+    expect(
+      within(rows[2])
+        .getAllByRole("cell")
+        .map((cell) => cell.textContent),
+    ).toEqual(["gpt-auto", "2,000,000", "$15.00", "$7.50", "-$5.00", "-50.0%"]);
+    expect(
+      table.compareDocumentPosition(screen.getByText("Auto-router prompt caching")) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox"));
+    await user.click(await screen.findByRole("option", { name: "gpt-auto" }));
+    await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(2));
+    expect(within(table).queryByText("claude-auto")).not.toBeInTheDocument();
+    expect(within(table).getByText("-$5.00")).toBeInTheDocument();
+  });
+
+  it.each([null, undefined, 0])("keeps token coverage and unit costs honest for %s tokens", (total_tokens) => {
+    const untracked = { total_tokens, saved_spend: null, saved_pct: null, baseline_spend: null };
+    mockHook({ data: response([group(untracked)]) });
+    renderTab();
+    const row = within(screen.getByRole("table", { name: "Router usage and savings" })).getAllByRole("row")[1];
+    expect(
+      within(row)
+        .getAllByRole("cell")
+        .map((cell) => cell.textContent),
+    ).toEqual([
+      "claude-auto",
+      total_tokens === 0 ? "0" : "Unavailable",
+      "$359.86",
+      "Unavailable",
+      "Unavailable",
+      "Unavailable",
+    ]);
+  });
+
+  it("shows a clear empty summary when no routers are present", () => {
+    mockHook({ data: response([], zeroTotals) });
+    renderTab();
+    expect(
+      within(screen.getByRole("table", { name: "Router usage and savings" })).getByText(
+        "No auto-routers in this range",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("leads with total estimated savings, before the three session-shape metrics", () => {
     mockHook({ data: response([group(), group({ router_name: "gpt-auto" })]) });
     renderTab();
@@ -220,10 +280,14 @@ describe("AutoRouterBenchmarksTab", () => {
     mockHook({ data: response([group(), group({ router_name: "gpt-auto" })]) });
     renderTab();
 
-    expect(screen.getByText("$2,174.59")).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("region", { name: "Auto-router savings" })).getByText("$2,174.59"),
+    ).toBeInTheDocument();
     expect(screen.getByText("-86%")).toBeInTheDocument();
     expect(screen.getByText("Actual auto-router spend")).toBeInTheDocument();
-    expect(screen.getByText("$359.86")).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("region", { name: "Auto-router savings" })).getByText("$359.86"),
+    ).toBeInTheDocument();
     expect(screen.getByText("Estimated baseline spend")).toBeInTheDocument();
     expect(screen.getByText("$2,534.45")).toBeInTheDocument();
     expect(screen.getByText("32.7")).toBeInTheDocument();
@@ -257,10 +321,16 @@ describe("AutoRouterBenchmarksTab", () => {
       mockHook({ data: response([group(stats)], stats) });
       renderTab();
 
-      expect(screen.getAllByText("Unavailable")).toHaveLength(2);
+      expect(
+        within(screen.getByRole("region", { name: "Auto-router savings" })).getAllByText("Unavailable"),
+      ).toHaveLength(2);
       expect(screen.queryByText(/\/ 1K turns/)).not.toBeInTheDocument();
-      expect(screen.getByText("$359.86")).toBeInTheDocument();
-      expect(screen.getByText("$2,174.59")).toBeInTheDocument();
+      expect(
+        within(screen.getByRole("region", { name: "Auto-router savings" })).getByText("$359.86"),
+      ).toBeInTheDocument();
+      expect(
+        within(screen.getByRole("region", { name: "Auto-router savings" })).getByText("$2,174.59"),
+      ).toBeInTheDocument();
       expect(screen.getByText(/some usage predates classification-cost tracking/)).toBeInTheDocument();
     },
   );
@@ -321,7 +391,7 @@ describe("AutoRouterBenchmarksTab", () => {
     mockHook({ data: response([group(huge)], huge) });
     renderTab();
 
-    const figure = screen.getByText("$123,456,789,012.34");
+    const figure = within(screen.getByRole("region", { name: "Auto-router savings" })).getByText("$123,456,789,012.34");
     const grid = figure.closest('[data-slot="card"]')?.firstElementChild;
     expect(grid).toHaveClass("md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]");
   });
