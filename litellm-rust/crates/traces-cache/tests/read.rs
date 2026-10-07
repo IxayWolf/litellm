@@ -282,6 +282,7 @@ fn span(index: usize) -> TraceSpansRow {
         model: String::new(),
         input_tokens: 0,
         output_tokens: 0,
+        pricing_attributes: Default::default(),
         litellm_request_id: String::new(),
         call_keys: Vec::new(),
         call_evidence: None,
@@ -815,4 +816,106 @@ async fn concurrent_pages_of_an_evicted_snapshot_share_one_storage_read() {
     assert_eq!(left.unwrap().unwrap().spans[0].span_id, "span-1");
     assert_eq!(right.unwrap().unwrap().spans[0].span_id, "span-1");
     assert_eq!(store.calls(Operation::TraceSpans), 1);
+}
+
+#[derive(Default)]
+struct TestEstimator {
+    calls: AtomicUsize,
+}
+
+impl litellm_traces_cache::CostEstimator for TestEstimator {
+    fn estimate(
+        &self,
+        attributes: Vec<std::collections::BTreeMap<String, String>>,
+    ) -> litellm_traces_cache::CostEstimates {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        Box::pin(async move {
+            attributes
+                .iter()
+                .map(|value| {
+                    value
+                        .get("test.cost")
+                        .filter(|_| {
+                            value.get("test.at").is_none_or(|expected| {
+                                value.get("litellm.trace.start_ns") == Some(expected)
+                            })
+                        })
+                        .and_then(|value| value.parse().ok())
+                })
+                .collect()
+        })
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn cost_estimator_reaches_detail_and_list_without_changing_snapshot_paging() {
+    let call = TraceSpansRow {
+        trace_id: "trace".into(),
+        kind: ObservationType::Llm,
+        start_ns: 1,
+        pricing_attributes: std::collections::BTreeMap::from([
+            ("test.cost".into(), "0.25".into()),
+            ("test.at".into(), "1".into()),
+            ("litellm.trace.start_ns".into(), "0".into()),
+        ]),
+        ..span(0)
+    };
+    let store = FakeStore::with_spans("ref", vec![call.clone()]);
+    store.set_list_runs(vec![run("trace", "ref")]);
+    store.set_run_spans(vec![call]);
+    let reader =
+        TraceReader::new(usize::MAX).with_estimator(std::sync::Arc::new(TestEstimator::default()));
+    let detail = reader
+        .get_trace_page(&store, &access(), "trace", "ref", None, 1)
+        .await
+        .unwrap()
+        .unwrap();
+    let list = reader
+        .list_traces(&store, &access(), 0, i64::MAX, None, 10)
+        .await
+        .unwrap();
+    assert_eq!(detail.summary.spend, Some(0.25));
+    assert_eq!(detail.summary.estimated_calls, 1);
+    assert_eq!(list.data[0].spend, detail.summary.spend);
+    assert_eq!(list.data[0].estimated_calls, 1);
+    assert!(detail.next_cursor.is_none());
+    assert_eq!(
+        detail.spans[0].spend_match,
+        Some(litellm_traces::SpendMatch::NoCallId)
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn list_estimation_batches_runs_without_sharing_span_identity_or_cost() {
+    let store = FakeStore::default();
+    store.set_list_runs(vec![run("first", "ref-first"), run("second", "ref-second")]);
+    store.set_run_spans(
+        [("first", "0.25"), ("second", "0.5")]
+            .map(|(trace_id, cost)| TraceSpansRow {
+                trace_id: trace_id.into(),
+                kind: ObservationType::Llm,
+                pricing_attributes: std::collections::BTreeMap::from([(
+                    "test.cost".into(),
+                    cost.into(),
+                )]),
+                ..span(0)
+            })
+            .to_vec(),
+    );
+    let estimator = std::sync::Arc::new(TestEstimator::default());
+    let reader = TraceReader::new(usize::MAX).with_estimator(estimator.clone());
+    let list = reader
+        .list_traces(&store, &access(), 0, i64::MAX, None, 10)
+        .await
+        .unwrap();
+    assert_eq!(estimator.calls.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        list.data
+            .iter()
+            .map(|run| (run.trace_id.as_str(), run.spend))
+            .collect::<Vec<_>>(),
+        [("first", Some(0.25)), ("second", Some(0.5))]
+    );
 }

@@ -480,6 +480,18 @@ def resolve_provider(custom_llm_provider: str | None) -> str:
     return mapped.value if mapped is not None else custom_llm_provider
 
 
+def litellm_provider_names(provider: str | None, model: str) -> tuple[str | None, ...]:
+    """Static lookup candidates for an observed GenAI provider, preserving explicit identifiers."""
+    if provider is None:
+        return (None,)
+    mapped: Final = _PROVIDER_BY_LITELLM.get(provider)
+    if mapped is not None and mapped.value != provider:
+        return (provider,)
+    candidates: Final = tuple(name for name, value in _PROVIDER_BY_LITELLM.items() if value.value == provider)
+    prefix: Final = model.partition("/")[0]
+    return (prefix,) if prefix in candidates else candidates or (provider,)
+
+
 def resolve_operation(call_type: str | None) -> GenAIOperation:
     """Map a litellm ``call_type`` to a ``gen_ai.operation.name`` value.
 

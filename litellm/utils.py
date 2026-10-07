@@ -5852,13 +5852,20 @@ def _strip_mantle_region_prefix(model: str) -> str:
     return split_mantle_region_prefix(model)[1]
 
 
-def get_potential_model_names(model: str, custom_llm_provider: str | None) -> PotentialModelNamesAndCustomLLMProvider:
+def get_potential_model_names(
+    model: str, custom_llm_provider: str | None, *, allow_dynamic: bool = True
+) -> PotentialModelNamesAndCustomLLMProvider:
+    if not allow_dynamic and custom_llm_provider is None:
+        prefix: Final = model.partition("/")[0]
+        custom_llm_provider = prefix if prefix in LlmProvidersSet else None
     if custom_llm_provider is None:
-        # Get custom_llm_provider
-        try:
-            get_llm_provider: Final = litellm_utils.get_llm_provider
-            split_model, custom_llm_provider, _, _ = get_llm_provider(model=model)
-        except Exception:
+        if allow_dynamic:
+            try:
+                get_llm_provider: Final = litellm_utils.get_llm_provider
+                split_model, custom_llm_provider, _, _ = get_llm_provider(model=model)
+            except Exception:
+                split_model = model
+        else:
             split_model = model
         combined_model_name = model
         stripped_model_name = _strip_model_name(model=model, custom_llm_provider=custom_llm_provider)
@@ -6010,9 +6017,13 @@ def get_model_info_helper(
     custom_llm_provider: str | None = None,
     api_base: str | None = None,
     api_key: str | None = None,
+    *,
+    allow_dynamic: bool = True,
+    default_token_cost: float = 0.0,
 ) -> ModelInfoBase:
     """
     Helper for 'get_model_info'. Separated out to avoid infinite loop caused by returning 'supported_openai_param's
+    Estimators can preserve missing token rates with default_token_cost=NaN instead of the legacy zero default.
     """
     from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 
@@ -6031,7 +6042,9 @@ def get_model_info_helper(
                 model = model + "@latest"
         ##########################
         potential_model_names: Final = get_potential_model_names(
-            model=model, custom_llm_provider=custom_llm_provider or declared_authenticating_provider(model)
+            model=model,
+            custom_llm_provider=custom_llm_provider or declared_authenticating_provider(model),
+            allow_dynamic=allow_dynamic,
         )
 
         verbose_logger.debug("checking potential_model_names in litellm.model_cost: %s", potential_model_names)
@@ -6045,7 +6058,7 @@ def get_model_info_helper(
         model_cost_custom_llm_provider: Final = custom_llm_provider
         #########################
         provider_config: BaseLLMModelInfo | None = None
-        if custom_llm_provider and custom_llm_provider in LlmProvidersSet:
+        if allow_dynamic and custom_llm_provider and custom_llm_provider in LlmProvidersSet:
             provider_config = ProviderConfigManager.get_provider_model_info(
                 model=model, provider=LlmProviders(custom_llm_provider)
             )
@@ -6069,7 +6082,7 @@ def get_model_info_helper(
                         e,
                     )
 
-        if custom_llm_provider == "huggingface":
+        if allow_dynamic and custom_llm_provider == "huggingface":
             max_tokens: Final = _get_max_position_embeddings(model_name=model)
             return ModelInfoBase(
                 key=model,
@@ -6143,21 +6156,23 @@ def get_model_info_helper(
             if _input_cost_per_token is None:
                 # default value to 0, be noisy about this
                 verbose_logger.debug(
-                    "model=%s, custom_llm_provider=%s has no input_cost_per_token in model_cost_map. Defaulting to 0.",
+                    "model=%s, custom_llm_provider=%s has no input_cost_per_token in model_cost_map. Defaulting to %s.",
                     model,
                     custom_llm_provider,
+                    default_token_cost,
                 )
-                _input_cost_per_token = 0
+                _input_cost_per_token = default_token_cost
 
             _output_cost_per_token: float | None = _model_info.get("output_cost_per_token")
             if _output_cost_per_token is None:
                 # default value to 0, be noisy about this
                 verbose_logger.debug(
-                    "model=%s, custom_llm_provider=%s has no output_cost_per_token in model_cost_map. Defaulting to 0.",
+                    "model=%s, custom_llm_provider=%s has no output_cost_per_token in model_cost_map. Defaulting to %s.",
                     model,
                     custom_llm_provider,
+                    default_token_cost,
                 )
-                _output_cost_per_token = 0
+                _output_cost_per_token = default_token_cost
 
             returned_model_info: Final = ModelInfoBase(
                 key=key,

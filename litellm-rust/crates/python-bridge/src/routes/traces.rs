@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use litellm_http::ClientVariant;
 use litellm_traces::{QueryScope, ReadQuery, Tenant, query::named::ReadAccessParams};
-use litellm_traces_cache::{ReadError, TraceReader};
+use litellm_traces_cache::{CostEstimates, CostEstimator, ReadError, TraceReader};
 use litellm_traces_clickhouse::{
     ClickHouseTraces, Config, Error, InsertTable, Parameter, QueryReaders,
 };
@@ -14,6 +14,28 @@ use pyo3::{
 };
 
 pyo3::import_exception!(litellm.rust_bridge.trace.errors, TraceChanged);
+
+struct PythonCostEstimator {
+    context: litellm_host_python::PythonContext,
+}
+
+impl CostEstimator for PythonCostEstimator {
+    fn estimate(&self, attributes: Vec<BTreeMap<String, String>>) -> CostEstimates {
+        let context = self.context.clone();
+        Box::pin(async move {
+            litellm_host_python::attach_blocking(context, move |py| -> PyResult<Vec<Option<f64>>> {
+                py.import("litellm.llms.base_llm.otel_cost")?
+                    .getattr("estimate_costs")?
+                    .call1((litellm_host_python::Pythonized(attributes),))?
+                    .extract()
+            })
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_default()
+        })
+    }
+}
 
 #[derive(Message)]
 struct OtlpErrorStatus {
@@ -137,9 +159,12 @@ impl NativeTraceStorage {
                 config.inner.storage().writer().clone(),
                 config.inner.storage().database().to_owned(),
             ),
-            reader: Arc::new(TraceReader::new(
-                litellm_storage_clickhouse::READ_LIMITS.response_bytes,
-            )),
+            reader: Arc::new(
+                TraceReader::new(litellm_storage_clickhouse::READ_LIMITS.response_bytes)
+                    .with_estimator(Arc::new(PythonCostEstimator {
+                        context: litellm_host_python::PythonContext::capture(config.py())?,
+                    })),
+            ),
             config: config.inner.clone(),
         })
     }

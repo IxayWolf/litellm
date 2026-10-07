@@ -7,6 +7,13 @@
           "format": "double",
           "type": "number"
         },
+        "estimated_calls": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer",
+          "x-python-optional": true
+        },
         "invocations": {
           "format": "uint64",
           "maximum": 18446744073709551615,
@@ -56,14 +63,33 @@
         "tool_calls",
         "duration_ms",
         "spend",
-        "priced_calls"
+        "priced_calls",
+        "estimated_calls"
       ],
       "type": "object"
+    },
+    "CostSource": {
+      "enum": [
+        "gateway",
+        "estimated"
+      ],
+      "type": "string"
     },
     "Span": {
       "properties": {
         "agent": {
           "type": "string"
+        },
+        "cost_source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CostSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "x-python-optional": true
         },
         "duration_ms": {
           "format": "double",
@@ -172,6 +198,7 @@
         "output_tokens",
         "litellm_request_id",
         "spend",
+        "cost_source",
         "spend_log_request_id",
         "spend_match"
       ],
@@ -242,6 +269,13 @@
           "maximum": 18446744073709551615,
           "minimum": 0,
           "type": "integer"
+        },
+        "estimated_calls": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer",
+          "x-python-optional": true
         },
         "frameworks": {
           "items": {
@@ -348,7 +382,8 @@
         "output_tokens",
         "models",
         "spend",
-        "priced_calls"
+        "priced_calls",
+        "estimated_calls"
       ],
       "type": "object"
     }

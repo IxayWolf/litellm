@@ -8,20 +8,21 @@ reservation logic so neither has to depend on the other.
 from typing import Final
 
 
-def _coerce_cost_per_token(value: float | str | None) -> float:
+def _coerce_cost_per_token(value: float | str | None, invalid_value: float | None = None) -> float:
     """
     Coerce a per-token cost into a float.
 
     Model cost values loaded from YAML config may arrive as strings (e.g.
     scientific notation like "4e-07"), which would break arithmetic.
     """
-    if value is None:
-        return 0.0
+    fallback: Final = 0.0 if invalid_value is None else invalid_value
+    if value is None or (invalid_value is not None and isinstance(value, bool)):
+        return fallback
     if isinstance(value, str):
         try:
             return float(value)
         except ValueError:
-            return 0.0
+            return fallback
     return float(value)
 
 
@@ -59,6 +60,9 @@ def tier_rate(
     tier: dict,
     cost_key: str,
     fallback_cost_key: str | None = None,
+    *,
+    default_value: float = 0.0,
+    invalid_value: float | None = None,
 ) -> float:
     """Read a per-token rate from a tier, coercing YAML string costs to float.
 
@@ -67,5 +71,6 @@ def tier_rate(
     """
     primary: Final = tier.get(cost_key)
     if primary is not None:
-        return _coerce_cost_per_token(primary)
-    return _coerce_cost_per_token(tier.get(fallback_cost_key, 0))
+        return _coerce_cost_per_token(primary, invalid_value)
+    fallback: Final = tier.get(fallback_cost_key)
+    return default_value if fallback is None else _coerce_cost_per_token(fallback, invalid_value)

@@ -60,6 +60,7 @@ class AgentNode(typing_extensions.TypedDict):
     duration_ms: ReadOnly[float]
     spend: ReadOnly[float | None]
     priced_calls: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    estimated_calls: ReadOnly[NotRequired[Annotated[int, Field(ge=0, le=18446744073709551615)]]]
 
 
 SpanType: TypeAlias = Literal[
@@ -76,6 +77,9 @@ SpanType: TypeAlias = Literal[
     "prompt",
     "decision",
 ]
+
+
+CostSource: TypeAlias = Literal["gateway", "estimated"]
 
 
 SpendMatch: TypeAlias = Literal["matched", "no_call_id", "no_spend_log", "ambiguous", "incomplete_evidence"]
@@ -125,6 +129,7 @@ class TraceSummary(typing_extensions.TypedDict):
     models: ReadOnly[tuple[str, ...]]
     spend: ReadOnly[float | None]
     priced_calls: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    estimated_calls: ReadOnly[NotRequired[Annotated[int, Field(ge=0, le=18446744073709551615)]]]
 
 
 class Span(typing_extensions.TypedDict):
@@ -145,6 +150,7 @@ class Span(typing_extensions.TypedDict):
     output_tokens: ReadOnly[Annotated[int, Field(ge=0, le=4294967295)]]
     litellm_request_id: ReadOnly[str | None]
     spend: ReadOnly[float | None]
+    cost_source: ReadOnly[NotRequired[CostSource | None | None]]
     spend_log_request_id: ReadOnly[str | None]
     spend_match: ReadOnly[SpendMatch | None | None]
 

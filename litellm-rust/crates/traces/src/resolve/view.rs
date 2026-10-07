@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use indexmap::IndexMap;
 use time::OffsetDateTime;
@@ -10,8 +10,9 @@ use crate::{
 };
 
 use super::{
+    estimates,
     resolution::{Resolution, agent_label},
-    spend::{Requests, request_cost, total},
+    spend::request_cost,
 };
 
 const NANOS_PER_MS: f64 = 1_000_000.0;
@@ -20,7 +21,12 @@ fn optional(value: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_owned())
 }
 
-fn span(resolution: &Resolution<'_>, index: usize, trace_start_ns: i64) -> Span {
+fn span(
+    resolution: &Resolution<'_>,
+    index: usize,
+    trace_start_ns: i64,
+    estimates: &estimates::ValidatedEstimates,
+) -> Span {
     let row = resolution.row(index);
     let status = resolution.status_source(index);
     let (requests, spend_match) = if let Some((requests, matched)) = resolution.call_match(index) {
@@ -31,6 +37,13 @@ fn span(resolution: &Resolution<'_>, index: usize, trace_start_ns: i64) -> Span 
     let spend = requests
         .as_ref()
         .and_then(|requests| request_cost(requests));
+    let estimate = estimates::cost(index, estimates);
+    let cost_source = if spend.is_some() {
+        Some(crate::CostSource::Gateway)
+    } else {
+        estimate.map(|_| crate::CostSource::Estimated)
+    };
+    let spend = spend.or(estimate);
     let spend_log_request_id = match (spend_match, requests.as_deref()) {
         (Some(SpendMatch::Matched), Some([request])) => Some(request.request_id.clone()),
         _ => None,
@@ -54,12 +67,16 @@ fn span(resolution: &Resolution<'_>, index: usize, trace_start_ns: i64) -> Span 
         output_tokens: row.output_tokens,
         litellm_request_id: optional(&row.litellm_request_id),
         spend,
+        cost_source,
         spend_log_request_id,
         spend_match,
     }
 }
 
-fn agents(resolution: &Resolution<'_>) -> Vec<AgentNode> {
+fn agents(
+    resolution: &Resolution<'_>,
+    estimates: &estimates::ValidatedEstimates,
+) -> Vec<AgentNode> {
     let graph = &resolution.graph;
     let mut entries: IndexMap<&str, Vec<usize>> = IndexMap::new();
     for index in (0..graph.rows.len()).filter(|index| resolution.is_agent(*index)) {
@@ -80,11 +97,6 @@ fn agents(resolution: &Resolution<'_>) -> Vec<AgentNode> {
             entries.entry(&row.agent).or_default().push(index);
         }
     }
-    let calls: Vec<(&str, Option<Requests<'_>>)> = resolution
-        .model_calls
-        .iter()
-        .map(|call| (resolution.owner(*call), resolution.call_requests(*call)))
-        .collect();
     let tools = resolution.unique_tools();
     entries
         .into_iter()
@@ -93,12 +105,13 @@ fn agents(resolution: &Resolution<'_>) -> Vec<AgentNode> {
                 let label = agent_label(resolution.row(ancestor));
                 (resolution.is_agent(ancestor) && label != name).then(|| label.to_owned())
             });
-            let owned_calls: Vec<Option<Requests<'_>>> = calls
+            let owned_calls: Vec<usize> = resolution
+                .model_calls
                 .iter()
-                .filter(|(owner, _)| *owner == name)
-                .map(|(_, requests)| requests.clone())
+                .copied()
+                .filter(|call| resolution.owner(*call) == name)
                 .collect();
-            let priced = total(&owned_calls);
+            let (priced, estimated_calls) = estimates::total(resolution, &owned_calls, estimates);
             AgentNode {
                 name: name.to_owned(),
                 parent_agent,
@@ -115,6 +128,7 @@ fn agents(resolution: &Resolution<'_>) -> Vec<AgentNode> {
                     / NANOS_PER_MS,
                 spend: priced.spend,
                 priced_calls: priced.priced_calls,
+                estimated_calls,
             }
         })
         .collect()
@@ -153,32 +167,39 @@ pub fn resolve_trace(
     rows: &[TraceSpansRow],
     spend: &[SpendRow],
 ) -> Option<Trace> {
+    resolve_trace_with_estimates(trace_id, trace_ref, rows, spend, &BTreeMap::new())
+}
+
+pub fn resolve_trace_with_estimates(
+    trace_id: &str,
+    trace_ref: &str,
+    rows: &[TraceSpansRow],
+    spend: &[SpendRow],
+    estimates: &BTreeMap<String, f64>,
+) -> Option<Trace> {
     let first = rows.first()?;
     let resolution = Resolution::new(rows, spend);
+    let validated_estimates = estimates::validated(&resolution, estimates);
+    let estimates = &validated_estimates;
     let trace_start_ns = rows.iter().map(|row| row.start_ns).min()?;
     let trace_end_ns = rows
         .iter()
         .map(|row| i128::from(row.start_ns) + i128::from(row.duration_ns))
         .max()?;
     let spans: Vec<Span> = (0..rows.len())
-        .map(|index| span(&resolution, index, trace_start_ns))
+        .map(|index| span(&resolution, index, trace_start_ns, estimates))
         .collect();
     let root = (0..rows.len())
         .find(|index| resolution.graph.is_root(*index))
         .unwrap_or_default();
-    let agents = agents(&resolution);
+    let agents = agents(&resolution, estimates);
     let calls = &resolution.model_calls;
     let counted: Vec<&TraceSpansRow> = if calls.is_empty() {
         rows.iter().collect()
     } else {
         calls.iter().map(|call| &rows[*call]).collect()
     };
-    let priced = total(
-        &calls
-            .iter()
-            .map(|call| resolution.call_requests(*call))
-            .collect::<Vec<_>>(),
-    );
+    let (priced, estimated_calls) = estimates::total(&resolution, calls, estimates);
     let first_input = spans
         .iter()
         .zip(rows)
@@ -229,6 +250,7 @@ pub fn resolve_trace(
         models: sorted_unique(calls.iter().map(|call| rows[*call].model.as_str())),
         spend: priced.spend,
         priced_calls: priced.priced_calls,
+        estimated_calls,
     };
     Some(Trace {
         summary,
@@ -266,5 +288,6 @@ pub fn listed_summary(row: &ListTracesRow) -> TraceSummary {
         models: row.models.clone(),
         spend: None,
         priced_calls: 0,
+        estimated_calls: 0,
     }
 }
