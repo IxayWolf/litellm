@@ -5,6 +5,10 @@ from typing import Final, Literal
 
 from litellm.litellm_core_utils.env_utils import get_env_int, get_env_int_in_range, get_env_int_or_none
 
+MICROSOFT_GRAPH_BETA_BASE: Final = "https://graph.microsoft.com/beta"
+MICROSOFT_ENTRA_LOGIN_AUTHORITY: Final = "https://login.microsoftonline.com"
+MICROSOFT_365_COPILOT_TOKEN_CACHE_SAFETY_MARGIN_SECONDS: Final = 60
+MICROSOFT_365_COPILOT_DEFAULT_TIME_ZONE: Final = "UTC"
 DEFER_PYDANTIC_BUILD: Final = os.getenv("DEFER_PYDANTIC_BUILD", "true") in ("true", "1", "on")
 DEFAULT_HEALTH_CHECK_PROMPT: Final = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"))
 AZURE_DEFAULT_RESPONSES_API_VERSION: Final = str(os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview"))
